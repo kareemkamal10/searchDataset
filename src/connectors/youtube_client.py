@@ -51,14 +51,15 @@ class YouTubeFetcher:
             "skip_download": True,
             "nocheckcertificate": True,
             "ignoreerrors": True,
-            "extract_flat": "in_playlist",
+            # use a general flat extract to support playlists and channels
+            "extract_flat": True,
             "no_warnings": True,
         }
         if ydl_opts:
             default_opts.update(ydl_opts)
         self.ydl_opts = default_opts
 
-    def get_playlist_videos(self, url: str) -> List[Dict[str, Any]]:
+    def get_playlist_videos(self, url: str, matcher=None) -> List[Dict[str, Any]]:
         """Return a list of video metadata dicts for a playlist or channel URL.
 
         Args:
@@ -91,6 +92,14 @@ class YouTubeFetcher:
                     duration = entry.get("duration")  # may be None for flat extract
                     thumbnail = entry.get("thumbnail")
 
+                    # detect shorts: prefer explicit '/shorts/' in webpage_url, otherwise short duration
+                    webpage = entry.get("webpage_url") or entry.get("original_url") or ""
+                    is_short = False
+                    if isinstance(webpage, str) and "/shorts/" in webpage:
+                        is_short = True
+                    elif duration is not None and isinstance(duration, (int, float)) and duration < 60:
+                        is_short = True
+
                     item = VideoItem(
                         video_id=vid,
                         cover_url=cover_url,
@@ -98,7 +107,23 @@ class YouTubeFetcher:
                         duration=duration,
                         thumbnail=thumbnail,
                     )
-                    videos.append(asdict(item))
+                    v = asdict(item)
+                    # attach match suggestion if matcher provided
+                    v.setdefault("manual_override", "")
+                    v.setdefault("selected", True)
+                    v["is_short"] = is_short
+                    if matcher is not None:
+                        try:
+                            match = matcher.find_original(title)
+                            v["proposed_original_url"] = match.get("url")
+                            v["proposed_original_title"] = match.get("title")
+                            v["proposed_confidence"] = match.get("confidence")
+                        except Exception:
+                            v["proposed_original_url"] = ""
+                            v["proposed_original_title"] = ""
+                            v["proposed_confidence"] = "Low"
+
+                    videos.append(v)
         except Exception as exc:  # keep broad but logged
             self.logger.exception("Failed to extract playlist videos for %s: %s", url, exc)
         return videos
